@@ -10,9 +10,6 @@ const PORT = process.env.PORT || 3000;
 const CLIENT_ID = '1552641681617326110';
 const CLIENT_SECRET = 'GWdbqnsdEMbtCjf2lej17EMYnjLmH6id';
 
-// Render par deploy hone ke baad yahan tera live URL aayega (abhi ke liye localhost)
-const REDIRECT_URI = process.env.REDIRECT_URI || 'http://localhost:3000/auth/discord/callback';
-
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(session({
@@ -21,7 +18,14 @@ app.use(session({
     saveUninitialized: true
 }));
 
-let activeRpcs = {}; // User-wise active RPC connections
+let activeRpcs = {};
+
+// Helper function to get correct dynamic redirect URI based on environment
+function getRedirectUri(req) {
+    const host = req.get('host');
+    const protocol = host.includes('localhost') ? 'http' : 'https';
+    return `${protocol}://${host}/auth/discord/callback`;
+}
 
 // Landing Page (Roxy Style UI)
 app.get('/', (req, res) => {
@@ -116,15 +120,18 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Discord Authentication
+// Discord Authentication with dynamic redirect URI
 app.get('/auth/discord', (req, res) => {
-    const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20connections`;
+    const redirectUri = getRedirectUri(req);
+    const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify%20connections`;
     res.redirect(authUrl);
 });
 
 app.get('/auth/discord/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) return res.send('Login Failed!');
+
+    const redirectUri = getRedirectUri(req);
 
     try {
         const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
@@ -134,7 +141,7 @@ app.get('/auth/discord/callback', async (req, res) => {
                 client_secret: CLIENT_SECRET,
                 grant_type: 'authorization_code',
                 code: code,
-                redirect_uri: REDIRECT_URI,
+                redirect_uri: redirectUri,
             }),
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         });
@@ -165,7 +172,6 @@ app.post('/start-rpc', (req, res) => {
 
     if (!token || !user) return res.redirect('/');
 
-    // Agar user ka pehle se koi rpc chal raha hai toh use band karo
     if (activeRpcs[user.id]) {
         activeRpcs[user.id].close();
     }
