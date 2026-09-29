@@ -1,6 +1,7 @@
 const express = require('express');
 const session = require('express-session');
 const axios = require('axios');
+const WebSocket = require('ws');
 
 const app = express();
 
@@ -17,6 +18,7 @@ app.use(session({
 }));
 
 let globalLogs = [];
+let activeWsConnections = {};
 
 function addLog(type, message) {
     const timestamp = new Date().toLocaleTimeString();
@@ -26,6 +28,7 @@ function addLog(type, message) {
     console.log(logEntry);
 }
 
+// 1. Dashboard UI
 app.get('/', (req, res) => {
     const user = req.session.user;
     let logsHtml = globalLogs.map(log => `<div>${log}</div>`).join('');
@@ -58,7 +61,7 @@ app.get('/', (req, res) => {
             <body>
                 <div class="container">
                     <h2>Welcome, ${user.username}</h2>
-                    <p>Status: <span id="status-text" style="color: yellow;">Connected Session</span></p>
+                    <p>Status: <span id="status-text" style="color: yellow;">Active Session</span></p>
                     
                     <h3>RPC Settings</h3>
                     <input type="text" id="gameName" placeholder="Game Name (e.g. Minecraft)" value="Minecraft">
@@ -94,11 +97,13 @@ app.get('/', (req, res) => {
     }
 });
 
+// 2. Discord OAuth Route
 app.get('/auth/discord', (req, res) => {
     const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20rpc%20rpc.activities.write`;
     res.redirect(discordAuthUrl);
 });
 
+// 3. OAuth Callback Route
 app.get('/auth/callback', async (req, res) => {
     const code = req.query.code;
     if (!code) return res.send('Authorization failed: No code provided.');
@@ -131,24 +136,96 @@ app.get('/auth/callback', async (req, res) => {
     }
 });
 
+// 4. RPC Control API with Desktop Emulation Handshake
 app.post('/api/rpc', async (req, res) => {
     const { enable, gameName, details, state } = req.body;
+    const user = req.session.user;
     const accessToken = req.session.accessToken;
 
-    if (!accessToken) {
+    if (!accessToken || !user) {
         return res.json({ success: false, message: 'Unauthorized! Please login again.' });
     }
 
+    if (activeWsConnections[user.id]) {
+        try { activeWsConnections[user.id].terminate(); } catch(e) {}
+        delete activeWsConnections[user.id];
+    }
+
     if (!enable) {
-        addLog('info', 'RPC turned OFF.');
+        addLog('info', 'RPC turned OFF by user.');
         return res.json({ success: true, message: 'RPC Turned Off' });
     }
 
-    addLog('info', `Processing Rich Presence simulation for: ${gameName}`);
-    
-    // Discord OAuth scopes ke through web session validation log
-    addLog('success', 'Session active. Custom web RPC payload configured successfully!');
-    res.json({ success: true, message: 'RPC state updated in dashboard session!' });
+    addLog('info', `Initializing Desktop-Emulated Gateway connection for: ${gameName}`);
+
+    try {
+        // Connecting with headers mimicking official Discord Desktop Client
+        const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json', {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Discord/1.0.9015 Chrome/108.0.5359.215 Electron/22.3.26 Safari/537.36',
+                'Origin': 'https://discord.com'
+            }
+        });
+        
+        activeWsConnections[user.id] = ws;
+
+        ws.on('open', () => {
+            addLog('success', 'Connected to Gateway with Desktop Headers!');
+        });
+
+        ws.on('message', (data) => {
+            const packet = JSON.parse(data);
+            
+            if (packet.op === 10) {
+                const identifyPayload = {
+                    op: 2,
+                    d: {
+                        token: accessToken,
+                        properties: {
+                            os: "Windows",
+                            browser: "Discord Client",
+                            device: "desktop",
+                            system_locale: "en-US",
+                            browser_user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Discord/1.0.9015 Chrome/108.0.5359.215 Electron/22.3.26 Safari/537.36",
+                            browser_version: "22.3.26",
+                            os_version: "10.0.19043",
+                            referrer: "",
+                            referring_domain: "",
+                            referrer_current: "",
+                            referring_domain_current: ""
+                        },
+                        presence: {
+                            activities: [{
+                                name: gameName,
+                                type: 0,
+                                details: details,
+                                state: state,
+                                timestamps: { start: Math.floor(Date.now() / 1000) }
+                            }],
+                            status: "online",
+                            since: 0,
+                            afk: false
+                        }
+                    }
+                };
+                ws.send(JSON.stringify(identifyPayload));
+                addLog('success', 'Dispatched Desktop Emulated Presence payload!');
+            }
+        });
+
+        ws.on('error', (err) => {
+            addLog('error', `Gateway Emulation Error: ${err.message}`);
+        });
+
+        ws.on('close', (code, reason) => {
+            addLog('info', `Gateway connection closed. Code: ${code}, Reason: ${reason.toString()}`);
+        });
+
+        res.json({ success: true, message: 'Emulated RPC connection triggered!' });
+    } catch (error) {
+        addLog('error', `Failed to start connection: ${error.message}`);
+        res.json({ success: false, message: 'Failed to start RPC.' });
+    }
 });
 
 const PORT = process.env.PORT || 3000;
