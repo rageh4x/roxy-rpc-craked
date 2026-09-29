@@ -1,15 +1,14 @@
 {
   "name": "roxy-rpc-pro",
   "version": "1.0.0",
-  "description": "Roxy style Discord Rich Presence dashboard",
+  "description": "Roxy clone discord rpc",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "express-session": "^1.17.3",
-    "node-fetch": "^2.6.7",
-    "ws": "^8.13.0"
+    "axios": "^1.7.9",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0"
   }
 }
