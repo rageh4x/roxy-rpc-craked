@@ -5,8 +5,8 @@ const axios = require('axios');
 const app =express();
 
 // Apni Discord Developer Portal ki details yahan daal
-const CLIENT_ID = 'YOUR_CLIENT_ID';
-const CLIENT_SECRET = 'YOUR_CLIENT_SECRET';
+const CLIENT_ID = '1552641681617326110';
+const CLIENT_SECRET = 'PDotjlme3LUOoc0H6ZG9zDCRQ8y_dqRY';
 const REDIRECT_URI = 'http://localhost:3000/auth/callback';
 
 app.use(express.urlencoded({ extended: true }));
