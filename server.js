@@ -5,9 +5,10 @@ const WebSocket = require('ws');
 
 const app = express();
 
-// Tere credentials yahan set hain
+// Apni credentials yahan daal
 const CLIENT_ID = '1552641681617326110';
 const CLIENT_SECRET = 'PDotjlme3LUOoc0H6ZG9zDCRQ8y_dqRY';
+const BOT_TOKEN = 'MTU1MjY0MTY4MTYxNzMyNjExMA.Gaqtk9.RaE5S3ZR4rQ7g2b6tuD8VGNV2W8qu7fZd2sC8w'; // Bot tab se copy kiya hua token
 const REDIRECT_URI = 'https://roxy-rpc-craked.onrender.com/auth/callback';
 
 app.use(express.urlencoded({ extended: true }));
@@ -137,13 +138,12 @@ app.get('/auth/callback', async (req, res) => {
     }
 });
 
-// 4. RPC Control API (Gateway WebSocket Connection)
+// 4. RPC Control API (Using Bot Token for Gateway Connection)
 app.post('/api/rpc', async (req, res) => {
     const { enable, gameName, details, state } = req.body;
     const user = req.session.user;
-    const accessToken = req.session.accessToken;
 
-    if (!accessToken || !user) {
+    if (!user) {
         return res.json({ success: false, message: 'Unauthorized! Please login again.' });
     }
 
@@ -157,14 +157,14 @@ app.post('/api/rpc', async (req, res) => {
         return res.json({ success: true, message: 'RPC Turned Off' });
     }
 
-    addLog('info', `Connecting to Discord Gateway for activity: ${gameName}`);
+    addLog('info', `Connecting to Discord Gateway via Bot Token for activity: ${gameName}`);
 
     try {
         const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
         activeWsConnections[user.id] = ws;
 
         ws.on('open', () => {
-            addLog('success', 'Connected to Discord Gateway WebSocket!');
+            addLog('success', 'Connected to Discord Gateway WebSocket with Bot Token!');
         });
 
         ws.on('message', (data) => {
@@ -174,7 +174,8 @@ app.post('/api/rpc', async (req, res) => {
                 const identifyPayload = {
                     op: 2,
                     d: {
-                        token: accessToken,
+                        token: BOT_TOKEN, // Using Bot Token here to bypass 4004 error
+                        intents: 1,
                         properties: {
                             os: "Windows",
                             browser: "Discord Client",
@@ -195,7 +196,7 @@ app.post('/api/rpc', async (req, res) => {
                     }
                 };
                 ws.send(JSON.stringify(identifyPayload));
-                addLog('success', 'Sent Identity & Presence payload to Discord!');
+                addLog('success', 'Sent Bot Presence payload to Discord successfully!');
             }
         });
 
@@ -207,7 +208,7 @@ app.post('/api/rpc', async (req, res) => {
             addLog('info', `WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
         });
 
-        res.json({ success: true, message: 'RPC Connection initiated!' });
+        res.json({ success: true, message: 'RPC Connection initiated with Bot Token!' });
     } catch (error) {
         addLog('error', `Gateway Connection Failed: ${error.message}`);
         res.json({ success: false, message: 'Failed to start RPC.' });
