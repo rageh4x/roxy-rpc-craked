@@ -7,7 +7,7 @@ const app =express();
 // Apni Discord Developer Portal ki details yahan daal
 const CLIENT_ID = '1552641681617326110';
 const CLIENT_SECRET = 'PDotjlme3LUOoc0H6ZG9zDCRQ8y_dqRY';
-const REDIRECT_URI = 'http://localhost:3000/auth/callback';
+const REDIRECT_URI = 'https://roxy-rpc-craked.onrender.com/auth/callback';
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
