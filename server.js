@@ -58,9 +58,9 @@ app.get('/', (req, res) => {
     const cfg = req.session.rpcConfig || {
         activity_type: "0",
         app_id: CLIENT_ID,
-        name: "Fast Client",
+        name: "Minecraft",
         state: "Competitive Match",
-        details: "Playing Minecraft"
+        details: "Playing on PvP Server"
     };
 
     res.send(`
@@ -127,7 +127,8 @@ app.get('/', (req, res) => {
 
 app.get('/auth/discord', (req, res) => {
     const redirectUri = getRedirectUri(req);
-    const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify%20connections`;
+    // Added 'rpc' and 'identify' scopes properly
+    const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify%20rpc`;
     res.redirect(authUrl);
 });
 
@@ -186,15 +187,15 @@ app.post('/toggle-rpc', (req, res) => {
     if (!user || !req.session.accessToken) return res.redirect('/');
 
     if (activeRpcs[user.id]) {
-        activeRpcs[user.id].close();
+        activeRpcs[user.id].terminate();
         delete activeRpcs[user.id];
     } else {
         const config = req.session.rpcConfig || {
             activity_type: "0",
             app_id: CLIENT_ID,
-            name: "Fast Client",
+            name: "Minecraft",
             state: "Competitive Match",
-            details: "Playing Minecraft"
+            details: "Playing on PvP Server"
         };
         startOrUpdateRpc(user, req.session.accessToken, config);
     }
@@ -204,10 +205,11 @@ app.post('/toggle-rpc', (req, res) => {
 
 function startOrUpdateRpc(user, token, config) {
     if (activeRpcs[user.id]) {
-        try { activeRpcs[user.id].close(); } catch(e) {}
+        try { activeRpcs[user.id].terminate(); } catch(e) {}
     }
 
-    const ws = new WebSocket('wss://gateway.discord.gg/?v=9&encoding=json');
+    // Upgraded to v=10 gateway for stability
+    const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
     activeRpcs[user.id] = ws;
 
     let heartbeatTimer = null;
@@ -215,6 +217,7 @@ function startOrUpdateRpc(user, token, config) {
     ws.on('message', (data) => {
         try {
             const packet = JSON.parse(data);
+            
             if (packet.op === 10) {
                 const interval = packet.d.heartbeat_interval;
                 
@@ -225,25 +228,38 @@ function startOrUpdateRpc(user, token, config) {
                     }
                 }, interval);
 
+                // FIXED: Using Android/Kizzy properties to prevent 4004 Authentication / Block
                 ws.send(JSON.stringify({
                     op: 2,
                     d: {
                         token: token,
-                        capabilities: 16381,
-                        properties: { os: "Windows", browser: "Chrome", device: "" },
-                        presence: {
-                            status: "online",
-                            since: 0,
-                            activities: [{
-                                name: config.name || "Fast Client",
-                                type: parseInt(config.activity_type) || 0,
-                                details: config.details || "",
-                                state: config.state || "",
-                                application_id: config.app_id || CLIENT_ID,
-                                timestamps: { start: Math.floor(Date.now() / 1000) }
-                            }],
-                            afk: false
+                        intents: 0,
+                        properties: {
+                            os: "Android",
+                            browser: "Discord Android",
+                            device: "Kizzy"
                         }
+                    }
+                }));
+            }
+
+            // Once READY event triggers, send the custom Rich Presence (op: 3)
+            if (packet.t === 'READY') {
+                console.log(`[+] RPC Gateway Ready for: ${packet.d.user.username}`);
+                ws.send(JSON.stringify({
+                    op: 3,
+                    d: {
+                        since: 0,
+                        activities: [{
+                            name: config.name || "Minecraft",
+                            type: parseInt(config.activity_type) || 0,
+                            details: config.details || "Playing on PvP Server",
+                            state: config.state || "Competitive Match",
+                            application_id: config.app_id || CLIENT_ID,
+                            timestamps: { start: Math.floor(Date.now() / 1000) }
+                        }],
+                        status: "online",
+                        afk: false
                     }
                 }));
             }
@@ -252,9 +268,15 @@ function startOrUpdateRpc(user, token, config) {
         }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
+        console.log(`[-] WS Closed: ${code} - ${reason}`);
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         delete activeRpcs[user.id];
+    });
+
+    ws.on('error', (err) => {
+        console.error('[WS Error]', err.message);
+        ws.close();
     });
 }
 
