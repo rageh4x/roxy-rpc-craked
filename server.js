@@ -1,10 +1,11 @@
 const express = require('express');
 const session = require('express-session');
 const axios = require('axios');
+const WebSocket = require('ws');
 
-const app =express();
+const app = express();
 
-// Apni Discord Developer Portal ki details yahan daal
+// Tere credentials yahan set hain
 const CLIENT_ID = '1552641681617326110';
 const CLIENT_SECRET = 'PDotjlme3LUOoc0H6ZG9zDCRQ8y_dqRY';
 const REDIRECT_URI = 'https://roxy-rpc-craked.onrender.com/auth/callback';
@@ -17,21 +18,20 @@ app.use(session({
     saveUninitialized: true
 }));
 
-// Global log array taaki dashboard par dikha sakein
 let globalLogs = [];
+let activeWsConnections = {};
 
 function addLog(type, message) {
     const timestamp = new Date().toLocaleTimeString();
     const logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
-    globalLogs.unshift(logEntry); // Naya log upar dikhega
-    if (globalLogs.maxLength > 50) globalLogs.pop();
+    globalLogs.unshift(logEntry);
+    if (globalLogs.length > 50) globalLogs.pop();
     console.log(logEntry);
 }
 
-// 1. Home Page / Dashboard UI
+// 1. Dashboard UI
 app.get('/', (req, res) => {
     const user = req.session.user;
-    
     let logsHtml = globalLogs.map(log => `<div>${log}</div>`).join('');
 
     if (!user) {
@@ -62,7 +62,7 @@ app.get('/', (req, res) => {
             <body>
                 <div class="container">
                     <h2>Welcome, ${user.username}</h2>
-                    <p>Status: <span id="status-text" style="color: yellow;">Disconnected</span></p>
+                    <p>Status: <span id="status-text" style="color: yellow;">Active Session</span></p>
                     
                     <h3>RPC Settings</h3>
                     <input type="text" id="gameName" placeholder="Game Name (e.g. Minecraft)" value="Minecraft">
@@ -123,7 +123,6 @@ app.get('/auth/callback', async (req, res) => {
         const accessToken = tokenResponse.data.access_token;
         addLog('success', 'OAuth Token successfully acquired!');
 
-        // User profile fetch karo
         const userResponse = await axios.get('https://discord.com/api/users/@me', {
             headers: { Authorization: `Bearer ${accessToken}` }
         });
@@ -134,17 +133,23 @@ app.get('/auth/callback', async (req, res) => {
         res.redirect('/');
     } catch (error) {
         addLog('error', `OAuth Error: ${error.response?.data ? JSON.stringify(error.response.data) : error.message}`);
-        res.send(`Authentication Error! Check console logs. <a href="/">Go Back</a>`);
+        res.send(`Authentication Error! Check logs. <a href="/">Go Back</a>`);
     }
 });
 
-// 4. RPC Control API (Yahan error capture hoga)
+// 4. RPC Control API (Gateway WebSocket Connection)
 app.post('/api/rpc', async (req, res) => {
     const { enable, gameName, details, state } = req.body;
+    const user = req.session.user;
     const accessToken = req.session.accessToken;
 
-    if (!accessToken) {
+    if (!accessToken || !user) {
         return res.json({ success: false, message: 'Unauthorized! Please login again.' });
+    }
+
+    if (activeWsConnections[user.id]) {
+        try { activeWsConnections[user.id].terminate(); } catch(e) {}
+        delete activeWsConnections[user.id];
     }
 
     if (!enable) {
@@ -152,30 +157,64 @@ app.post('/api/rpc', async (req, res) => {
         return res.json({ success: true, message: 'RPC Turned Off' });
     }
 
-    addLog('info', `Attempting to push activity: ${gameName} - ${details}`);
+    addLog('info', `Connecting to Discord Gateway for activity: ${gameName}`);
 
     try {
-        // Discord API endpoint check (OAuth token ke through activity update test)
-        // Note: Standard OAuth Access token se direct Gateway connect nahi hota, 
-        // yahan hum API response check karenge ki Discord kya error deta hai.
-        const response = await axios.put(`https://discord.com/api/v10/users/@me/settings`, {
-            // Testing payload structure
-        }, {
-            headers: {
-                Authorization: `Bearer ${accessToken}`,
-                'Content-Type': 'application/json'
+        const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
+        activeWsConnections[user.id] = ws;
+
+        ws.on('open', () => {
+            addLog('success', 'Connected to Discord Gateway WebSocket!');
+        });
+
+        ws.on('message', (data) => {
+            const packet = JSON.parse(data);
+            
+            if (packet.op === 10) {
+                const identifyPayload = {
+                    op: 2,
+                    d: {
+                        token: accessToken,
+                        properties: {
+                            os: "Windows",
+                            browser: "Discord Client",
+                            device: "Roxy RPC"
+                        },
+                        presence: {
+                            activities: [{
+                                name: gameName,
+                                type: 0,
+                                details: details,
+                                state: state,
+                                timestamps: { start: Math.floor(Date.now() / 1000) }
+                            }],
+                            status: "online",
+                            since: 0,
+                            afk: false
+                        }
+                    }
+                };
+                ws.send(JSON.stringify(identifyPayload));
+                addLog('success', 'Sent Identity & Presence payload to Discord!');
             }
         });
 
-        addLog('success', 'RPC Response received successfully!');
-        res.json({ success: true, message: 'RPC Command executed!' });
+        ws.on('error', (err) => {
+            addLog('error', `WebSocket Error: ${err.message}`);
+        });
+
+        ws.on('close', (code, reason) => {
+            addLog('info', `WebSocket closed. Code: ${code}, Reason: ${reason.toString()}`);
+        });
+
+        res.json({ success: true, message: 'RPC Connection initiated!' });
     } catch (error) {
-        const errDetails = error.response?.data ? JSON.stringify(error.response.data) : error.message;
-        addLog('error', `Discord API Error: ${errDetails}`);
-        res.json({ success: false, message: `Failed! Check dashboard logs for reason.` });
+        addLog('error', `Gateway Connection Failed: ${error.message}`);
+        res.json({ success: false, message: 'Failed to start RPC.' });
     }
 });
 
-app.listen(3000, () => {
-    console.log('Server is running on http://localhost:3000');
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
