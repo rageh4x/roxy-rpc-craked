@@ -1,285 +1,181 @@
 const express = require('express');
 const session = require('express-session');
-const fetch = require('node-fetch');
-const WebSocket = require('ws');
+const axios = require('axios');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
+const app =express();
 
-const CLIENT_ID = '1552641681617326110';
-const CLIENT_SECRET = 'GWdbqnsdEMbtCjf2lej17EMYnjLmH6id';
+// Apni Discord Developer Portal ki details yahan daal
+const CLIENT_ID = 'YOUR_CLIENT_ID';
+const CLIENT_SECRET = 'YOUR_CLIENT_SECRET';
+const REDIRECT_URI = 'http://localhost:3000/auth/callback';
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(session({
-    secret: 'roxy_pro_secure_key_2026',
+    secret: 'roxy-clone-secret-key',
     resave: false,
     saveUninitialized: true
 }));
 
-let activeRpcs = {};
+// Global log array taaki dashboard par dikha sakein
+let globalLogs = [];
 
-function getRedirectUri(req) {
-    const host = req.get('host');
-    const protocol = host.includes('localhost') ? 'http' : 'https';
-    return `${protocol}://${host}/auth/discord/callback`;
+function addLog(type, message) {
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = `[${timestamp}] [${type.toUpperCase()}] ${message}`;
+    globalLogs.unshift(logEntry); // Naya log upar dikhega
+    if (globalLogs.maxLength > 50) globalLogs.pop();
+    console.log(logEntry);
 }
 
+// 1. Home Page / Dashboard UI
 app.get('/', (req, res) => {
-    if (!req.session.user) {
-        return res.send(`
-            <!DOCTYPE html>
-            <html lang="en">
+    const user = req.session.user;
+    
+    let logsHtml = globalLogs.map(log => `<div>${log}</div>`).join('');
+
+    if (!user) {
+        res.send(`
+            <html>
+            <head><title>Login - Roxy Clone</title></head>
+            <body style="background: #111; color: #fff; font-family: sans-serif; text-align: center; padding-top: 50px;">
+                <h1>Login with Discord</h1>
+                <p>RPC test karne ke liye pehle authorize karein.</p>
+                <a href="/auth/discord" style="background: #5865F2; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">Login with Discord</a>
+            </body>
+            </html>
+        `);
+    } else {
+        res.send(`
+            <html>
             <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Roxy RPC Pro</title>
+                <title>Dashboard - Roxy Clone</title>
                 <style>
-                    body { background: #000000; color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center; }
-                    .hero { padding: 40px 30px; background: #0a0a0a; border: 1px solid #222; border-radius: 20px; box-shadow: 0 10px 40px rgba(0,0,0,0.9); max-width: 420px; width: 90%; }
-                    h1 { font-size: 32px; font-weight: 800; margin-bottom: 8px; }
-                    p { color: #888; font-size: 15px; margin-bottom: 30px; }
-                    .btn-login { background: #ffffff; color: #000000; padding: 14px 28px; border-radius: 12px; text-decoration: none; font-weight: 700; display: inline-block; width: 100%; box-sizing: border-box; }
+                    body { background: #121212; color: #fff; font-family: sans-serif; padding: 20px; }
+                    .container { max-width: 600px; margin: auto; background: #1e1e1e; padding: 20px; border-radius: 10px; }
+                    input, button { width: 100%; padding: 10px; margin: 10px 0; background: #2b2b2b; border: 1px solid #444; color: #fff; border-radius: 5px; }
+                    button { background: #5865F2; font-weight: bold; cursor: pointer; }
+                    button.off { background: #ed4245; }
+                    .logs { background: #000; color: #0f0; padding: 15px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 13px; border-radius: 5px; text-align: left; }
                 </style>
             </head>
             <body>
-                <div class="hero">
-                    <h1>ROXY RPC PRO</h1>
-                    <p>The ultimate Discord Rich Presence engine.</p>
-                    <a class="btn-login" href="/auth/discord">Login with Discord</a>
+                <div class="container">
+                    <h2>Welcome, ${user.username}</h2>
+                    <p>Status: <span id="status-text" style="color: yellow;">Disconnected</span></p>
+                    
+                    <h3>RPC Settings</h3>
+                    <input type="text" id="gameName" placeholder="Game Name (e.g. Minecraft)" value="Minecraft">
+                    <input type="text" id="details" placeholder="Details (e.g. Playing Solo)" value="Testing RPC">
+                    <input type="text" id="state" placeholder="State (e.g. In Menu)" value="Online">
+                    
+                    <button onclick="toggleRPC(true)">Turn RPC ON</button>
+                    <button class="off" onclick="toggleRPC(false)">Turn RPC OFF</button>
+
+                    <h3>Live Error & Activity Logs:</h3>
+                    <div class="logs" id="log-box">${logsHtml || 'No logs yet...'}</div>
                 </div>
+
+                <script>
+                    async function toggleRPC(enable) {
+                        const gameName = document.getElementById('gameName').value;
+                        const details = document.getElementById('details').value;
+                        const state = document.getElementById('state').value;
+
+                        const res = await fetch('/api/rpc', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ enable, gameName, details, state })
+                        });
+                        const data = await res.json();
+                        alert(data.message);
+                        location.reload();
+                    }
+                </script>
             </body>
             </html>
         `);
     }
-
-    const user = req.session.user;
-    const isRpcActive = activeRpcs[user.id] ? true : false;
-    const cfg = req.session.rpcConfig || {
-        activity_type: "0",
-        app_id: CLIENT_ID,
-        name: "Minecraft",
-        state: "Competitive Match",
-        details: "Playing on PvP Server"
-    };
-
-    res.send(`
-        <!DOCTYPE html>
-        <html lang="en">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Dashboard - Roxy RPC Pro</title>
-            <style>
-                body { background: #050505; color: #f3f4f6; font-family: -apple-system, BlinkMacSystemFont, sans-serif; padding: 20px; margin: 0; }
-                .container { max-width: 500px; margin: auto; background: #0f0f11; padding: 20px; border-radius: 16px; border: 1px solid #222; box-shadow: 0 10px 30px rgba(0,0,0,0.8); }
-                .user-box { display: flex; align-items: center; background: #18181b; padding: 12px 16px; border-radius: 12px; margin-bottom: 20px; border: 1px solid #27272a; }
-                .user-box img { width: 45px; height: 45px; border-radius: 50%; margin-right: 12px; }
-                .user-info h3 { margin: 0; font-size: 15px; color: #fff; }
-                .user-info span { font-size: 12px; font-weight: 700; color: ${isRpcActive ? '#22c55e' : '#ef4444'}; }
-                h2 { font-size: 14px; margin: 15px 0 10px 0; color: #fff; text-transform: uppercase; letter-spacing: 0.5px; }
-                label { display: block; margin-top: 8px; font-size: 10px; color: #a1a1aa; font-weight: 700; text-transform: uppercase; }
-                input, select { width: 100%; padding: 10px; margin-top: 4px; background: #09090b; border: 1px solid #27272a; color: white; border-radius: 8px; box-sizing: border-box; font-size: 13px; }
-                .row { display: flex; gap: 8px; }
-                .row > div { flex: 1; }
-                .btn-update { background: #6366f1; color: white; border: none; padding: 12px; width: 100%; border-radius: 8px; font-weight: 700; cursor: pointer; margin-top: 15px; font-size: 13px; }
-                .btn-toggle { background: ${isRpcActive ? '#ef4444' : '#22c55e'}; color: white; border: none; padding: 12px; width: 100%; border-radius: 8px; font-weight: 700; cursor: pointer; margin-top: 8px; font-size: 13px; }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="user-box">
-                    <img src="https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png" alt="Avatar">
-                    <div class="user-info">
-                        <h3>${user.username}</h3>
-                        <span>${isRpcActive ? '● ONLINE (RPC ACTIVE)' : '○ OFFLINE (RPC STOPPED)'}</span>
-                    </div>
-                </div>
-
-                <form action="/update-rpc" method="POST">
-                    <h2>Rich Presence Engine</h2>
-                    
-                    <div class="row">
-                        <div>
-                            <label>Details</label>
-                            <input type="text" name="details" value="${cfg.details}">
-                        </div>
-                        <div>
-                            <label>State</label>
-                            <input type="text" name="state" value="${cfg.state}">
-                        </div>
-                    </div>
-
-                    <label>Application ID</label>
-                    <input type="text" name="app_id" value="${cfg.app_id || CLIENT_ID}" required>
-
-                    <button type="submit" class="btn-update">UPDATE & ENABLE RPC</button>
-                </form>
-
-                <form action="/toggle-rpc" method="POST">
-                    <button type="submit" class="btn-toggle">${isRpcActive ? 'STOP RPC' : 'START RPC'}</button>
-                </form>
-            </div>
-        </body>
-        </html>
-    `);
 });
 
+// 2. Discord OAuth Route
 app.get('/auth/discord', (req, res) => {
-    const redirectUri = getRedirectUri(req);
-    // Added 'rpc' and 'identify' scopes properly
-    const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=identify%20rpc`;
-    res.redirect(authUrl);
+    const discordAuthUrl = `https://discord.com/api/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=code&scope=identify%20rpc%20rpc.activities.write`;
+    res.redirect(discordAuthUrl);
 });
 
-app.get('/auth/discord/callback', async (req, res) => {
+// 3. OAuth Callback Route
+app.get('/auth/callback', async (req, res) => {
     const code = req.query.code;
-    if (!code) return res.send('Login Failed!');
-
-    const redirectUri = getRedirectUri(req);
+    if (!code) return res.send('Authorization failed: No code provided.');
 
     try {
-        const tokenResponse = await fetch('https://discord.com/api/oauth2/token', {
-            method: 'POST',
-            body: new URLSearchParams({
-                client_id: CLIENT_ID,
-                client_secret: CLIENT_SECRET,
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: redirectUri,
-            }),
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
+            client_id: CLIENT_ID,
+            client_secret: CLIENT_SECRET,
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: REDIRECT_URI,
+        }), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         });
 
-        const tokenData = await tokenResponse.json();
-        if (!tokenData.access_token) return res.send('Token fetch failed.');
+        const accessToken = tokenResponse.data.access_token;
+        addLog('success', 'OAuth Token successfully acquired!');
 
-        const userResponse = await fetch('https://discord.com/api/users/@me', {
-            headers: { authorization: `Bearer ${tokenData.access_token}` },
+        // User profile fetch karo
+        const userResponse = await axios.get('https://discord.com/api/users/@me', {
+            headers: { Authorization: `Bearer ${accessToken}` }
         });
-        const userData = await userResponse.json();
 
-        req.session.user = userData;
-        req.session.accessToken = tokenData.access_token;
-        
+        req.session.user = userResponse.data;
+        req.session.accessToken = accessToken;
+
         res.redirect('/');
-    } catch (err) {
-        console.error(err);
-        res.send('Authentication Error occurred.');
+    } catch (error) {
+        addLog('error', `OAuth Error: ${error.response?.data ? JSON.stringify(error.response.data) : error.message}`);
+        res.send(`Authentication Error! Check console logs. <a href="/">Go Back</a>`);
     }
 });
 
-app.post('/update-rpc', (req, res) => {
-    const user = req.session.user;
-    if (!user) return res.redirect('/');
-    
-    req.session.rpcConfig = req.body;
-    
-    if (activeRpcs[user.id]) {
-        startOrUpdateRpc(user, req.session.accessToken, req.body);
-    }
-    
-    res.redirect('/');
-});
+// 4. RPC Control API (Yahan error capture hoga)
+app.post('/api/rpc', async (req, res) => {
+    const { enable, gameName, details, state } = req.body;
+    const accessToken = req.session.accessToken;
 
-app.post('/toggle-rpc', (req, res) => {
-    const user = req.session.user;
-    if (!user || !req.session.accessToken) return res.redirect('/');
-
-    if (activeRpcs[user.id]) {
-        activeRpcs[user.id].terminate();
-        delete activeRpcs[user.id];
-    } else {
-        const config = req.session.rpcConfig || {
-            activity_type: "0",
-            app_id: CLIENT_ID,
-            name: "Minecraft",
-            state: "Competitive Match",
-            details: "Playing on PvP Server"
-        };
-        startOrUpdateRpc(user, req.session.accessToken, config);
+    if (!accessToken) {
+        return res.json({ success: false, message: 'Unauthorized! Please login again.' });
     }
 
-    res.redirect('/');
-});
-
-function startOrUpdateRpc(user, token, config) {
-    if (activeRpcs[user.id]) {
-        try { activeRpcs[user.id].terminate(); } catch(e) {}
+    if (!enable) {
+        addLog('info', 'RPC turned OFF by user.');
+        return res.json({ success: true, message: 'RPC Turned Off' });
     }
 
-    // Upgraded to v=10 gateway for stability
-    const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json');
-    activeRpcs[user.id] = ws;
+    addLog('info', `Attempting to push activity: ${gameName} - ${details}`);
 
-    let heartbeatTimer = null;
-
-    ws.on('message', (data) => {
-        try {
-            const packet = JSON.parse(data);
-            
-            if (packet.op === 10) {
-                const interval = packet.d.heartbeat_interval;
-                
-                if (heartbeatTimer) clearInterval(heartbeatTimer);
-                heartbeatTimer = setInterval(() => {
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({ op: 1, d: null }));
-                    }
-                }, interval);
-
-                // FIXED: Using Android/Kizzy properties to prevent 4004 Authentication / Block
-                ws.send(JSON.stringify({
-                    op: 2,
-                    d: {
-                        token: token,
-                        intents: 0,
-                        properties: {
-                            os: "Android",
-                            browser: "Discord Android",
-                            device: "Kizzy"
-                        }
-                    }
-                }));
+    try {
+        // Discord API endpoint check (OAuth token ke through activity update test)
+        // Note: Standard OAuth Access token se direct Gateway connect nahi hota, 
+        // yahan hum API response check karenge ki Discord kya error deta hai.
+        const response = await axios.put(`https://discord.com/api/v10/users/@me/settings`, {
+            // Testing payload structure
+        }, {
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                'Content-Type': 'application/json'
             }
+        });
 
-            // Once READY event triggers, send the custom Rich Presence (op: 3)
-            if (packet.t === 'READY') {
-                console.log(`[+] RPC Gateway Ready for: ${packet.d.user.username}`);
-                ws.send(JSON.stringify({
-                    op: 3,
-                    d: {
-                        since: 0,
-                        activities: [{
-                            name: config.name || "Minecraft",
-                            type: parseInt(config.activity_type) || 0,
-                            details: config.details || "Playing on PvP Server",
-                            state: config.state || "Competitive Match",
-                            application_id: config.app_id || CLIENT_ID,
-                            timestamps: { start: Math.floor(Date.now() / 1000) }
-                        }],
-                        status: "online",
-                        afk: false
-                    }
-                }));
-            }
-        } catch (err) {
-            console.error('[RPC Error]', err);
-        }
-    });
+        addLog('success', 'RPC Response received successfully!');
+        res.json({ success: true, message: 'RPC Command executed!' });
+    } catch (error) {
+        const errDetails = error.response?.data ? JSON.stringify(error.response.data) : error.message;
+        addLog('error', `Discord API Error: ${errDetails}`);
+        res.json({ success: false, message: `Failed! Check dashboard logs for reason.` });
+    }
+});
 
-    ws.on('close', (code, reason) => {
-        console.log(`[-] WS Closed: ${code} - ${reason}`);
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        delete activeRpcs[user.id];
-    });
-
-    ws.on('error', (err) => {
-        console.error('[WS Error]', err.message);
-        ws.close();
-    });
-}
-
-app.listen(PORT, () => {
-    console.log(`Roxy Pro Engine running on port ${PORT}`);
+app.listen(3000, () => {
+    console.log('Server is running on http://localhost:3000');
 });
