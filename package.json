@@ -1,13 +1,15 @@
 {
-  "name": "discord-rpc",
+  "name": "roxy-rpc-url",
   "version": "1.0.0",
-  "description": "Discord RPC 24/7",
+  "description": "Roxy style RPC with Direct Image URL",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
+    "express-session": "^1.17.3",
+    "axios": "^1.6.0",
     "ws": "^8.16.0"
   }
 }
