@@ -28,7 +28,7 @@ function addLog(type, message) {
     console.log(logEntry);
 }
 
-// 1. Dashboard UI
+// 1. Dashboard UI with Image URL Input
 app.get('/', (req, res) => {
     const user = req.session.user;
     let logsHtml = globalLogs.map(log => `<div>${log}</div>`).join('');
@@ -36,10 +36,10 @@ app.get('/', (req, res) => {
     if (!user) {
         res.send(`
             <html>
-            <head><title>Login - Roxy Clone</title></head>
+            <head><title>Login - Roxy RPC</title></head>
             <body style="background: #111; color: #fff; font-family: sans-serif; text-align: center; padding-top: 50px;">
                 <h1>Login with Discord</h1>
-                <p>RPC test karne ke liye pehle authorize karein.</p>
+                <p>RPC start karne ke liye pehle authorize karein.</p>
                 <a href="/auth/discord" style="background: #5865F2; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; font-weight: bold;">Login with Discord</a>
             </body>
             </html>
@@ -48,7 +48,7 @@ app.get('/', (req, res) => {
         res.send(`
             <html>
             <head>
-                <title>Dashboard - Roxy Clone</title>
+                <title>Dashboard - Roxy RPC</title>
                 <style>
                     body { background: #121212; color: #fff; font-family: sans-serif; padding: 20px; }
                     .container { max-width: 600px; margin: auto; background: #1e1e1e; padding: 20px; border-radius: 10px; }
@@ -64,14 +64,15 @@ app.get('/', (req, res) => {
                     <p>Status: <span id="status-text" style="color: yellow;">Active Session</span></p>
                     
                     <h3>RPC Settings</h3>
-                    <input type="text" id="gameName" placeholder="Game Name (e.g. Minecraft)" value="Minecraft">
-                    <input type="text" id="details" placeholder="Details (e.g. Playing Solo)" value="Testing RPC">
-                    <input type="text" id="state" placeholder="State (e.g. In Menu)" value="Online">
+                    <input type="text" id="gameName" placeholder="Game Name" value="Fast Client">
+                    <input type="text" id="details" placeholder="Details" value="Playing Minecraft 1.21.11">
+                    <input type="text" id="state" placeholder="State" value="In Game">
+                    <input type="text" id="imageUrl" placeholder="Direct Image URL (e.g. https://i.imgur.com/...)" value="">
                     
-                    <button onclick="toggleRPC(true)">Turn RPC ON</button>
+                    <button onclick="toggleRPC(true)">Turn RPC ON (DND + URL Image)</button>
                     <button class="off" onclick="toggleRPC(false)">Turn RPC OFF</button>
 
-                    <h3>Live Error & Activity Logs:</h3>
+                    <h3>Live Logs:</h3>
                     <div class="logs" id="log-box">${logsHtml || 'No logs yet...'}</div>
                 </div>
 
@@ -80,11 +81,12 @@ app.get('/', (req, res) => {
                         const gameName = document.getElementById('gameName').value;
                         const details = document.getElementById('details').value;
                         const state = document.getElementById('state').value;
+                        const imageUrl = document.getElementById('imageUrl').value;
 
                         const res = await fetch('/api/rpc', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ enable, gameName, details, state })
+                            body: JSON.stringify({ enable, gameName, details, state, imageUrl })
                         });
                         const data = await res.json();
                         alert(data.message);
@@ -136,9 +138,9 @@ app.get('/auth/callback', async (req, res) => {
     }
 });
 
-// 4. RPC Control API with Desktop Emulation Handshake
+// 4. RPC Control API with Direct URL Support & DND
 app.post('/api/rpc', async (req, res) => {
-    const { enable, gameName, details, state } = req.body;
+    const { enable, gameName, details, state, imageUrl } = req.body;
     const user = req.session.user;
     const accessToken = req.session.accessToken;
 
@@ -159,7 +161,6 @@ app.post('/api/rpc', async (req, res) => {
     addLog('info', `Initializing Desktop-Emulated Gateway connection for: ${gameName}`);
 
     try {
-        // Connecting with headers mimicking official Discord Desktop Client
         const ws = new WebSocket('wss://gateway.discord.gg/?v=10&encoding=json', {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Discord/1.0.9015 Chrome/108.0.5359.215 Electron/22.3.26 Safari/537.36',
@@ -177,6 +178,25 @@ app.post('/api/rpc', async (req, res) => {
             const packet = JSON.parse(data);
             
             if (packet.op === 10) {
+                // Activity object setup
+                let activityData = {
+                    name: gameName,
+                    type: 0,
+                    details: details,
+                    state: state,
+                    application_id: CLIENT_ID,
+                    timestamps: { start: Math.floor(Date.now() / 1000) }
+                };
+
+                // Agar user ne Image URL diya hai toh use mp:external format me set karo
+                if (imageUrl && imageUrl.trim() !== '') {
+                    const cleanUrl = imageUrl.replace('https://', '').replace('http://', '');
+                    activityData.assets = {
+                        large_image: `mp:external/${cleanUrl}`
+                    };
+                    addLog('success', `Using Direct Image URL: ${imageUrl}`);
+                }
+
                 const identifyPayload = {
                     op: 2,
                     d: {
@@ -195,21 +215,15 @@ app.post('/api/rpc', async (req, res) => {
                             referring_domain_current: ""
                         },
                         presence: {
-                            activities: [{
-                                name: gameName,
-                                type: 0,
-                                details: details,
-                                state: state,
-                                timestamps: { start: Math.floor(Date.now() / 1000) }
-                            }],
-                            status: "online",
+                            activities: [activityData],
+                            status: "dnd",
                             since: 0,
                             afk: false
                         }
                     }
                 };
                 ws.send(JSON.stringify(identifyPayload));
-                addLog('success', 'Dispatched Desktop Emulated Presence payload!');
+                addLog('success', 'Dispatched Desktop Emulated Presence payload with DND & URL Image!');
             }
         });
 
@@ -221,7 +235,7 @@ app.post('/api/rpc', async (req, res) => {
             addLog('info', `Gateway connection closed. Code: ${code}, Reason: ${reason.toString()}`);
         });
 
-        res.json({ success: true, message: 'Emulated RPC connection triggered!' });
+        res.json({ success: true, message: 'Emulated RPC connection triggered with URL & DND!' });
     } catch (error) {
         addLog('error', `Failed to start connection: ${error.message}`);
         res.json({ success: false, message: 'Failed to start RPC.' });
