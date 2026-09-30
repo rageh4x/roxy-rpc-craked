@@ -1,9 +1,10 @@
 {
-  "name": "discord-rpc-render",
+  "name": "discord-rpc",
   "version": "1.0.0",
-  "main": "index.js",
+  "description": "Discord RPC 24/7",
+  "main": "server.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
